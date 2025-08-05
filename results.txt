@@ -1,0 +1,134 @@
+=== 1. Evaluación con política epsilon-greedy (epsilon=0.1) ===
+Recompensa promedio: 125.93
+
+=== 2. Evaluación con Exploring Starts ===
+Recompensa promedio (Exploring Starts): 130.12
+
+=== 3. Comparación de distintos valores de epsilon ===
+Epsilon 0.00 -> Recompensa promedio: 117.65
+Epsilon 0.10 -> Recompensa promedio: 123.22
+Epsilon 0.20 -> Recompensa promedio: 130.13
+Epsilon 0.50 -> Recompensa promedio: 138.34
+
+=== 4. Evaluación con aprendizaje Off-Policy ===
+Valores estimados V(s) usando off-policy:
+(('product_A', 8), ('product_B', 9)): 0.83
+(('product_A', 1), ('product_B', 4)): 30.70
+(('product_A', 7), ('product_B', 10)): 3.57
+(('product_A', 6), ('product_B', 8)): 8.84
+(('product_A', 8), ('product_B', 3)): 12.56
+(('product_A', 10), ('product_B', 7)): 17.96
+(('product_A', 7), ('product_B', 8)): 18.00
+(('product_A', 8), ('product_B', 5)): 25.82
+(('product_A', 6), ('product_B', 10)): -7.48
+(('product_A', 1), ('product_B', 8)): 46.93
+(('product_A', 0), ('product_B', 5)): 19.38
+(('product_A', 7), ('product_B', 4)): 24.20
+(('product_A', 2), ('product_B', 7)): 41.54
+(('product_A', 4), ('product_B', 5)): 9.60
+(('product_A', 0), ('product_B', 0)): 10.12
+(('product_A', 0), ('product_B', 7)): 26.26
+(('product_A', 1), ('product_B', 7)): 16.71
+(('product_A', 4), ('product_B', 0)): 12.96
+(('product_A', 6), ('product_B', 7)): 10.91
+(('product_A', 5), ('product_B', 8)): 39.46
+(('product_A', 2), ('product_B', 0)): 20.72
+(('product_A', 8), ('product_B', 1)): 18.45
+(('product_A', 7), ('product_B', 6)): 13.89
+(('product_A', 3), ('product_B', 7)): 19.41
+(('product_A', 6), ('product_B', 6)): 29.90
+(('product_A', 9), ('product_B', 2)): -6.85
+(('product_A', 4), ('product_B', 8)): 31.67
+(('product_A', 5), ('product_B', 6)): 15.42
+(('product_A', 5), ('product_B', 5)): 0.88
+(('product_A', 9), ('product_B', 5)): 9.50
+(('product_A', 7), ('product_B', 2)): 16.11
+(('product_A', 3), ('product_B', 1)): 4.19
+(('product_A', 6), ('product_B', 3)): 36.72
+(('product_A', 6), ('product_B', 0)): 29.65
+(('product_A', 8), ('product_B', 4)): 17.00
+(('product_A', 2), ('product_B', 4)): 28.03
+(('product_A', 3), ('product_B', 8)): 63.04
+(('product_A', 1), ('product_B', 10)): -6.33
+(('product_A', 1), ('product_B', 9)): 14.25
+(('product_A', 4), ('product_B', 3)): 33.44
+(('product_A', 2), ('product_B', 2)): 23.50
+(('product_A', 5), ('product_B', 9)): 29.24
+(('product_A', 4), ('product_B', 10)): 2.92
+(('product_A', 8), ('product_B', 2)): 21.53
+(('product_A', 0), ('product_B', 9)): 21.82
+(('product_A', 10), ('product_B', 8)): -0.80
+(('product_A', 3), ('product_B', 5)): 10.90
+(('product_A', 4), ('product_B', 1)): 53.33
+(('product_A', 1), ('product_B', 1)): 15.88
+(('product_A', 5), ('product_B', 2)): 22.90
+(('product_A', 5), ('product_B', 3)): 70.87
+(('product_A', 9), ('product_B', 3)): 7.00
+(('product_A', 10), ('product_B', 0)): -7.50
+(('product_A', 8), ('product_B', 8)): 29.74
+(('product_A', 5), ('product_B', 1)): 67.77
+(('product_A', 1), ('product_B', 6)): 29.26
+(('product_A', 6), ('product_B', 4)): 95.12
+(('product_A', 0), ('product_B', 6)): 10.86
+(('product_A', 2), ('product_B', 5)): 10.60
+(('product_A', 8), ('product_B', 6)): 23.89
+(('product_A', 0), ('product_B', 10)): 17.14
+(('product_A', 3), ('product_B', 3)): 13.50
+(('product_A', 9), ('product_B', 9)): 2.50
+(('product_A', 3), ('product_B', 10)): -9.00
+(('product_A', 8), ('product_B', 7)): 14.18
+(('product_A', 3), ('product_B', 0)): 20.33
+(('product_A', 9), ('product_B', 6)): 10.83
+(('product_A', 0), ('product_B', 3)): 15.14
+(('product_A', 0), ('product_B', 4)): 26.27
+(('product_A', 3), ('product_B', 2)): 28.45
+(('product_A', 9), ('product_B', 7)): 11.54
+(('product_A', 6), ('product_B', 2)): 15.24
+(('product_A', 1), ('product_B', 0)): 6.09
+(('product_A', 9), ('product_B', 1)): 16.80
+(('product_A', 7), ('product_B', 7)): 12.73
+(('product_A', 4), ('product_B', 6)): 22.48
+(('product_A', 5), ('product_B', 4)): 23.85
+(('product_A', 6), ('product_B', 5)): 15.92
+(('product_A', 4), ('product_B', 2)): 78.48
+(('product_A', 5), ('product_B', 10)): -3.50
+(('product_A', 0), ('product_B', 2)): 44.07
+(('product_A', 2), ('product_B', 1)): 43.55
+(('product_A', 0), ('product_B', 8)): 13.43
+(('product_A', 5), ('product_B', 0)): 13.06
+(('product_A', 9), ('product_B', 0)): 33.95
+(('product_A', 10), ('product_B', 5)): 57.70
+(('product_A', 3), ('product_B', 6)): 42.25
+(('product_A', 4), ('product_B', 9)): 7.83
+(('product_A', 8), ('product_B', 0)): 10.25
+(('product_A', 7), ('product_B', 0)): 15.95
+(('product_A', 7), ('product_B', 3)): 9.30
+(('product_A', 4), ('product_B', 4)): 5.50
+(('product_A', 8), ('product_B', 10)): -6.40
+(('product_A', 2), ('product_B', 3)): 37.55
+(('product_A', 2), ('product_B', 8)): 26.45
+(('product_A', 10), ('product_B', 9)): -1.00
+(('product_A', 9), ('product_B', 8)): 6.50
+(('product_A', 10), ('product_B', 2)): 7.25
+(('product_A', 7), ('product_B', 9)): 10.60
+(('product_A', 7), ('product_B', 5)): 31.80
+(('product_A', 6), ('product_B', 9)): 8.40
+(('product_A', 3), ('product_B', 4)): 25.14
+(('product_A', 3), ('product_B', 9)): 4.27
+(('product_A', 1), ('product_B', 3)): 20.00
+(('product_A', 1), ('product_B', 5)): 28.94
+(('product_A', 2), ('product_B', 10)): -3.43
+(('product_A', 2), ('product_B', 6)): 9.00
+(('product_A', 10), ('product_B', 3)): -24.00
+(('product_A', 7), ('product_B', 1)): 6.76
+(('product_A', 9), ('product_B', 4)): 11.00
+(('product_A', 0), ('product_B', 1)): 47.64
+(('product_A', 2), ('product_B', 9)): 31.68
+(('product_A', 5), ('product_B', 7)): 28.07
+(('product_A', 1), ('product_B', 2)): 12.80
+(('product_A', 10), ('product_B', 4)): 5.50
+(('product_A', 10), ('product_B', 6)): 13.78
+(('product_A', 6), ('product_B', 1)): 16.85
+(('product_A', 4), ('product_B', 7)): 21.28
+(('product_A', 10), ('product_B', 1)): -4.33
+(('product_A', 9), ('product_B', 10)): 6.70
