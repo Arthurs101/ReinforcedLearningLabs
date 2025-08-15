@@ -1,0 +1,54 @@
+Resultados CliffWalking-v1 (20250815_122422)
+
+SARSA:
+  Retorno medio final: -35.20
+  Retorno medio total: -837.07
+  Promedios cada 100 episodios:
+    Episodios 1-100: -6255.30
+    Episodios 101-200: -142.79
+    Episodios 201-300: -72.78
+    Episodios 301-400: -57.84
+    Episodios 401-500: -49.53
+    Episodios 501-600: -39.68
+    Episodios 601-700: -41.19
+    Episodios 701-800: -37.43
+
+ExpectedSARSA:
+  Retorno medio final: -17.20
+  Retorno medio total: -721.51
+  Promedios cada 100 episodios:
+    Episodios 1-100: -5538.40
+    Episodios 101-200: -86.09
+    Episodios 201-300: -38.82
+    Episodios 301-400: -27.00
+    Episodios 401-500: -21.93
+    Episodios 501-600: -20.06
+    Episodios 601-700: -19.43
+    Episodios 701-800: -20.36
+
+nStepSARSA(n=4):
+  Retorno medio final: -25.60
+  Retorno medio total: -1259.33
+  Promedios cada 100 episodios:
+    Episodios 1-100: -9172.79
+    Episodios 101-200: -383.28
+    Episodios 201-300: -169.74
+    Episodios 301-400: -106.29
+    Episodios 401-500: -88.80
+    Episodios 501-600: -45.22
+    Episodios 601-700: -52.93
+    Episodios 701-800: -55.58
+
+Qlearning:
+  Retorno medio final: -13.80
+  Retorno medio total: -1175.30
+  Promedios cada 100 episodios:
+    Episodios 1-100: -8797.43
+    Episodios 101-200: -264.17
+    Episodios 201-300: -130.94
+    Episodios 301-400: -72.50
+    Episodios 401-500: -46.62
+    Episodios 501-600: -30.76
+    Episodios 601-700: -27.60
+    Episodios 701-800: -32.40
+
