@@ -1,2 +1,15 @@
-#Ignore the python venv
+# Editor state
+.cursor/
+# Virtual environments
+# Virtual environments
 /rl_env/
+venv/
+pyvenv.cfg
+
+# Python caches
+__pycache__/
+*.pyc
+
+# SUMO temp directories
+tmp/
+/tmp/
