@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import gymnasium as gym
 import numpy as np
@@ -16,7 +16,7 @@ except Exception as exc:  # pragma: no cover
         "The 'traci' module is required. Please ensure SUMO is installed and available on PATH."
     ) from exc
 
-from .scenario import ScenarioArtifacts, SimpleIntersectionScenario
+from .scenario import ScenarioArtifacts, SimpleIntersectionScenario, OSMScenario
 
 
 @dataclass(slots=True)
@@ -52,7 +52,7 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
     def __init__(
         self,
         config: Optional[SUMOEnvironmentConfig] = None,
-        scenario: Optional[SimpleIntersectionScenario] = None,
+        scenario: Optional[Union[SimpleIntersectionScenario, OSMScenario]] = None,
     ) -> None:
         super().__init__()
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -307,6 +308,311 @@ class SimpleIntersectionScenario:
     def cleanup(self) -> None:
         """Remove any generated artifacts."""
 
+        if self._artifacts is not None:
+            self._artifacts.cleanup()
+            self._artifacts = None
+
+
+class OSMScenario:
+    """Convert an OSM map file to SUMO network format and generate routes."""
+
+    def __init__(
+        self,
+        osm_file: Path,
+        flow_rate: int = 600,
+        output_dir: Optional[Path] = None,
+        tls_id: Optional[str] = None,
+        begin_time: int = 0,
+        end_time: int = 3600,
+        netconvert_options: Optional[List[str]] = None,
+    ) -> None:
+        """
+        Initialize OSM scenario builder.
+
+        Args:
+            osm_file: Path to the OSM file
+            flow_rate: Vehicle flow rate per hour
+            output_dir: Directory to store generated files (default: temp directory)
+            tls_id: Traffic light ID to control (default: first TLS found in network)
+            begin_time: Simulation start time
+            end_time: Simulation end time
+            netconvert_options: Additional options for netconvert
+        """
+        self.osm_file = Path(osm_file)
+        if not self.osm_file.exists():
+            raise FileNotFoundError(f"OSM file not found: {self.osm_file}")
+        
+        self.flow_rate = flow_rate
+        self.begin_time = begin_time
+        self.end_time = end_time
+        self.tls_id = tls_id
+        self._provided_dir = output_dir
+        self._artifacts: Optional[ScenarioArtifacts] = None
+        self._netconvert_options = netconvert_options or []
+
+    def build(self, regenerate: bool = False) -> ScenarioArtifacts:
+        """Create the SUMO network, routes, and configuration files from OSM."""
+
+        if self._artifacts is not None and not regenerate:
+            return self._artifacts
+
+        temp_dir = Path(self._provided_dir) if self._provided_dir else Path(
+            tempfile.mkdtemp(prefix="sumo-osm-")
+        )
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        net_file = temp_dir / "network.net.xml"
+        route_file = temp_dir / "routes.rou.xml"
+        config_file = temp_dir / "config.sumocfg"
+        trips_file = temp_dir / "trips.trips.xml"
+
+        # Convert OSM to SUMO network
+        tls_id, plain_files = self._generate_network(temp_dir, net_file)
+
+        # Use provided TLS ID or the first one found
+        final_tls_id = self.tls_id or tls_id
+        if not final_tls_id:
+            raise ValueError("No traffic lights found in the network. Please ensure the OSM file contains traffic signals.")
+
+        # Extract lanes for the selected traffic light
+        incoming_lanes, outgoing_lanes = self._extract_lanes_for_tls(net_file, final_tls_id)
+
+        # Generate routes
+        self._generate_routes(net_file, trips_file, route_file)
+
+        # Write config file
+        self._write_config_file(config_file, net_file, route_file)
+
+        self._artifacts = ScenarioArtifacts(
+            directory=temp_dir,
+            net_file=net_file,
+            route_file=route_file,
+            config_file=config_file,
+            tls_id=final_tls_id,
+            incoming_lanes=incoming_lanes,
+            outgoing_lanes=outgoing_lanes,
+            plain_files=plain_files + [trips_file],
+        )
+        return self._artifacts
+
+    def _generate_network(
+        self, temp_dir: Path, net_file: Path
+    ) -> Tuple[Optional[str], List[Path]]:
+        """Convert OSM file to SUMO network using netconvert with cleaning options."""
+        
+        cmd = [
+            self._resolve_netconvert_binary(),
+            "--osm-files",
+            os.fspath(self.osm_file),
+            "--output-file",
+            os.fspath(net_file),
+            "--no-internal-links",
+            "--geometry.remove",
+            "--roundabouts.guess",
+            "true",
+            "--ramps.guess",
+            "true",
+            "--junctions.join",
+            "true",
+            "--tls.guess-signals",
+            "true",
+            "--tls.discard-simple",
+            "true",
+            "--tls.join",
+            "true",
+        ]
+        cmd.extend(self._netconvert_options)
+
+        subprocess.run(cmd, check=True)
+
+        # Extract traffic light IDs
+        tls_id = self._extract_tls_ids(net_file)
+
+        return tls_id, []
+
+    def _extract_tls_ids(self, net_file: Path) -> Optional[str]:
+        """Extract traffic light IDs from the network file."""
+        tree = ET.parse(net_file)
+        root = tree.getroot()
+
+        tls_ids: List[str] = []
+
+        # Find all traffic lights
+        for tl_logic in root.findall("tlLogic"):
+            tls_id = tl_logic.get("id")
+            if tls_id:
+                tls_ids.append(tls_id)
+
+        # If no tlLogic elements found, check inside tlLogics container
+        if not tls_ids:
+            tl_logics = root.find("tlLogics")
+            if tl_logics is not None:
+                for tl_logic in tl_logics.findall("tlLogic"):
+                    tls_id = tl_logic.get("id")
+                    if tls_id:
+                        tls_ids.append(tls_id)
+
+        # If still no TLS found, check junctions
+        if not tls_ids:
+            for junction in root.findall("junction"):
+                junction_id = junction.get("id", "")
+                junction_type = junction.get("type", "")
+                if junction_type == "traffic_light":
+                    tls_ids.append(junction_id)
+
+        return tls_ids[0] if tls_ids else None
+
+    def _extract_lanes_for_tls(
+        self, net_file: Path, tls_id: str
+    ) -> Tuple[List[str], List[str]]:
+        """Extract lanes connected to a specific traffic light."""
+        tree = ET.parse(net_file)
+        root = tree.getroot()
+
+        incoming_lanes: List[str] = []
+        outgoing_lanes: List[str] = []
+
+        # Find junction nodes controlled by this TLS
+        tls_nodes: set[str] = set()
+        
+        # Check if TLS ID matches a junction directly
+        for junction in root.findall("junction"):
+            junction_id = junction.get("id", "")
+            junction_type = junction.get("type", "")
+            if junction_type == "traffic_light" and (junction_id == tls_id or junction_id.startswith(tls_id)):
+                tls_nodes.add(junction_id)
+
+        # Also check connections to find lanes controlled by this TLS
+        for connection in root.findall("connection"):
+            tl_attr = connection.get("tl", "")
+            if tl_attr == tls_id:
+                from_edge_id = connection.get("from", "")
+                from_lane_idx = int(connection.get("fromLane", "0"))
+                # Find the actual lane ID from the edge
+                for edge in root.findall("edge"):
+                    if edge.get("id") == from_edge_id:
+                        lanes = edge.findall("lane")
+                        if from_lane_idx < len(lanes):
+                            lane_id = lanes[from_lane_idx].get("id", "")
+                            if lane_id and lane_id not in incoming_lanes:
+                                incoming_lanes.append(lane_id)
+                        break
+
+        # Find edges connected to traffic light junctions
+        for edge in root.findall("edge"):
+            from_node = edge.get("from", "")
+            to_node = edge.get("to", "")
+            
+            # Check if edge is connected to a traffic light junction
+            if to_node in tls_nodes:
+                for lane in edge.findall("lane"):
+                    lane_id = lane.get("id", "")
+                    if lane_id and lane_id not in incoming_lanes:
+                        incoming_lanes.append(lane_id)
+            
+            if from_node in tls_nodes:
+                for lane in edge.findall("lane"):
+                    lane_id = lane.get("id", "")
+                    if lane_id and lane_id not in outgoing_lanes:
+                        outgoing_lanes.append(lane_id)
+
+        return incoming_lanes, outgoing_lanes
+
+    def _generate_routes(
+        self, net_file: Path, trips_file: Path, route_file: Path
+    ) -> None:
+        """Generate routes using randomTrips.py and duarouter."""
+        
+        # First, generate trips using randomTrips.py
+        random_trips_script = self._resolve_random_trips_binary()
+        python_exe = sys.executable  # Use the same Python interpreter
+        random_trips_cmd = [
+            python_exe,
+            random_trips_script,
+            "-n",
+            os.fspath(net_file),
+            "-o",
+            os.fspath(trips_file),
+            "--begin",
+            str(self.begin_time),
+            "--end",
+            str(self.end_time),
+            "--flows-per-hour",
+            str(self.flow_rate),
+            "--random",
+        ]
+
+        subprocess.run(random_trips_cmd, check=True)
+
+        # Then, convert trips to routes using duarouter
+        duarouter_cmd = [
+            self._resolve_duarouter_binary(),
+            "-n",
+            os.fspath(net_file),
+            "-t",
+            os.fspath(trips_file),
+            "-o",
+            os.fspath(route_file),
+            "--ignore-errors",
+            "--remove-loops",
+        ]
+
+        subprocess.run(duarouter_cmd, check=True)
+
+    def _write_config_file(
+        self, config_file: Path, net_file: Path, route_file: Path
+    ) -> None:
+        """Write SUMO configuration file."""
+        root = ET.Element("configuration")
+
+        input_elem = ET.SubElement(root, "input")
+        net_elem = ET.SubElement(input_elem, "net-file")
+        net_elem.set("value", os.fspath(net_file))
+        route_elem = ET.SubElement(input_elem, "route-files")
+        route_elem.set("value", os.fspath(route_file))
+
+        time_elem = ET.SubElement(root, "time")
+        ET.SubElement(time_elem, "begin").set("value", str(self.begin_time))
+        ET.SubElement(time_elem, "end").set("value", str(self.end_time))
+
+        processing_elem = ET.SubElement(root, "processing")
+        ET.SubElement(processing_elem, "lateral-resolution").set("value", "0.8")
+
+        report_elem = ET.SubElement(root, "report")
+        ET.SubElement(report_elem, "verbose").set("value", "false")
+        ET.SubElement(report_elem, "duration-log.disable").set("value", "true")
+
+        ET.ElementTree(root).write(config_file, encoding="utf-8", xml_declaration=True)
+
+    def _resolve_netconvert_binary(self) -> str:
+        """Resolve path to netconvert binary."""
+        sumo_home = os.environ.get("SUMO_HOME")
+        if sumo_home:
+            candidate = Path(sumo_home) / "bin" / "netconvert"
+            if candidate.exists():
+                return os.fspath(candidate)
+        return "netconvert"
+
+    def _resolve_duarouter_binary(self) -> str:
+        """Resolve path to duarouter binary."""
+        sumo_home = os.environ.get("SUMO_HOME")
+        if sumo_home:
+            candidate = Path(sumo_home) / "bin" / "duarouter"
+            if candidate.exists():
+                return os.fspath(candidate)
+        return "duarouter"
+
+    def _resolve_random_trips_binary(self) -> str:
+        """Resolve path to randomTrips.py script."""
+        sumo_home = os.environ.get("SUMO_HOME")
+        if sumo_home:
+            candidate = Path(sumo_home) / "tools" / "randomTrips.py"
+            if candidate.exists():
+                return os.fspath(candidate)
+        return "randomTrips.py"
+
+    def cleanup(self) -> None:
+        """Remove any generated artifacts."""
         if self._artifacts is not None:
             self._artifacts.cleanup()
             self._artifacts = None
