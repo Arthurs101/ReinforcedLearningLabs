@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Dict
 
@@ -27,8 +30,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--target-update", type=int, default=200, help="Steps between target network updates")
     parser.add_argument("--eval-every", type=int, default=0, help="Evaluate every N episodes (0 disables)")
     parser.add_argument("--eval-episodes", type=int, default=5, help="Episodes to average during evaluation runs")
-    parser.add_argument("--save-path", type=Path, default=Path("artifacts/dqn_agent.pt"), help="Where to save the trained agent")
+    parser.add_argument("--save-path", type=Path, default=None, help="Where to save the trained agent (default: output/run_id/weights.pt)")
     parser.add_argument("--no-train", action="store_true", help="Skip learning and run evaluation only")
+    parser.add_argument("--eval-gui", action="store_true", help="Run evaluation with GUI visualization (requires --load-path)")
+    parser.add_argument("--load-path", type=Path, default=None, help="Path to load trained agent weights for evaluation")
+    parser.add_argument("--output-dir", type=Path, default=Path("output"), help="Directory to save run outputs (default: output)")
+    parser.add_argument("--run-id", type=str, default=None, help="Run ID for this training session (default: auto-generated)")
     # OSM file support
     parser.add_argument("--osm-file", type=Path, default=None, help="Path to OSM map file (if provided, uses OSM scenario instead of simple intersection)")
     parser.add_argument("--flow-rate", type=int, default=600, help="Vehicle flow rate per hour (for OSM scenarios)")
@@ -60,12 +67,15 @@ def run_episode(env: SUMOEnvironment, agent: DQNAgent, train: bool = True) -> Tu
     done = False
     episode_reward = 0.0
     episode_info = None
+    episode_losses = []
+    episode_actions = []
 
     while not done:
         action = agent.select_action(observation, explore=train)
         next_obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         episode_info = info  # Keep last info for final metrics
+        episode_actions.append(action)
 
         if train:
             transition = AgentTransition(
@@ -76,12 +86,26 @@ def run_episode(env: SUMOEnvironment, agent: DQNAgent, train: bool = True) -> Tu
                 done=done,
             )
             agent.observe(transition)
-            agent.update()
+            update_metrics = agent.update()
+            if update_metrics and "loss" in update_metrics:
+                episode_losses.append(update_metrics["loss"])
 
         observation = next_obs
         episode_reward += reward
 
-    return episode_reward, episode_info or {}
+    # Calculate action distribution
+    action_counts = {}
+    for action in episode_actions:
+        action_counts[action] = action_counts.get(action, 0) + 1
+    
+    episode_info = episode_info or {}
+    episode_info["losses"] = episode_losses
+    episode_info["actions"] = episode_actions
+    episode_info["action_distribution"] = action_counts
+    episode_info["avg_loss"] = float(np.mean(episode_losses)) if episode_losses else None
+    episode_info["num_updates"] = len(episode_losses)
+
+    return episode_reward, episode_info
 
 
 def evaluate(env: SUMOEnvironment, agent: DQNAgent, episodes: int) -> Tuple[float, dict]:
@@ -101,8 +125,60 @@ def evaluate(env: SUMOEnvironment, agent: DQNAgent, episodes: int) -> Tuple[floa
     return avg_reward, metrics
 
 
+def generate_run_id() -> str:
+    """Generate a unique run ID based on timestamp."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_id = str(uuid.uuid4())[:8]
+    return f"{timestamp}_{unique_id}"
+
+
+def save_metrics(run_dir: Path, metrics: Dict) -> None:
+    """Save metrics to JSON file."""
+    metrics_file = run_dir / "metrics.json"
+    with open(metrics_file, "w") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"Saved metrics to {metrics_file}")
+
+
+def save_config(run_dir: Path, args: argparse.Namespace, run_id: str) -> None:
+    """Save training configuration for reproducibility."""
+    config = {
+        "run_id": run_id,
+        "episodes": args.episodes,
+        "max_steps": args.max_steps,
+        "step_length": args.step_length,
+        "seed": args.seed,
+        "learning_rate": args.learning_rate,
+        "batch_size": args.batch_size,
+        "replay_size": args.replay_size,
+        "target_update": args.target_update,
+        "eval_every": args.eval_every,
+        "eval_episodes": args.eval_episodes,
+        "osm_file": str(args.osm_file) if args.osm_file else None,
+        "flow_rate": args.flow_rate,
+        "tls_id": args.tls_id,
+        "device": args.device,
+    }
+    config_file = run_dir / "config.json"
+    with open(config_file, "w") as f:
+        json.dump(config, f, indent=2)
+    print(f"Saved config to {config_file}")
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    
+    # Generate or use provided run ID
+    run_id = args.run_id or generate_run_id()
+    run_dir = args.output_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Run ID: {run_id}")
+    print(f"Output directory: {run_dir}")
+    
+    # Save configuration
+    save_config(run_dir, args, run_id)
+
     env_config, agent_config = build_configs(args)
 
     # Create scenario based on whether OSM file is provided
@@ -134,16 +210,90 @@ def main(argv: list[str]) -> int:
         print(f"Incoming lanes: {len(env.artifacts.incoming_lanes)}")
         print(f"Outgoing lanes: {len(env.artifacts.outgoing_lanes)}")
 
-    if args.no_train:
-        score, metrics = evaluate(env, agent, args.eval_episodes)
-        print(f"\nEvaluation Results (untrained agent):")
+    # Handle GUI evaluation mode
+    if args.eval_gui:
+        if not args.load_path or not args.load_path.exists():
+            print(f"Error: --load-path is required for --eval-gui mode", file=sys.stderr)
+            return 1
+        agent.load(args.load_path)
+        print(f"Loaded agent from {args.load_path}")
+        
+        # Create GUI config for evaluation
+        eval_config = SUMOEnvironmentConfig(
+            max_steps=args.max_steps,
+            step_length=args.step_length,
+            use_gui=True,  # Force GUI for visualization
+            seed=args.seed,
+        )
+        eval_env = SUMOEnvironment(config=eval_config, scenario=scenario)
+        
+        print("\nRunning evaluation with GUI...")
+        print(f"Running {args.eval_episodes} episodes. Watch the SUMO GUI window.")
+        score, metrics = evaluate(eval_env, agent, args.eval_episodes)
+        
+        print(f"\nEvaluation Results:")
         print(f"  Average Reward: {score:.2f}")
         print(f"  Average Total Queues: {metrics['avg_total_queues']:.1f}")
         print(f"  Average Total Waiting Time: {metrics['avg_total_waiting_time']:.2f}s")
+        
+        # Save evaluation metrics
+        eval_metrics = {
+            "run_id": run_id,
+            "mode": "evaluation_gui",
+            "episodes": args.eval_episodes,
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat(),
+        }
+        save_metrics(run_dir, eval_metrics)
+        
+        eval_env.close()
         env.close()
         return 0
 
+    if args.no_train:
+        if args.load_path and args.load_path.exists():
+            agent.load(args.load_path)
+            print(f"Loaded agent from {args.load_path}")
+        
+        score, metrics = evaluate(env, agent, args.eval_episodes)
+        print(f"\nEvaluation Results:")
+        print(f"  Average Reward: {score:.2f}")
+        print(f"  Average Total Queues: {metrics['avg_total_queues']:.1f}")
+        print(f"  Average Total Waiting Time: {metrics['avg_total_waiting_time']:.2f}s")
+        
+        # Save evaluation metrics
+        eval_metrics = {
+            "run_id": run_id,
+            "mode": "evaluation",
+            "episodes": args.eval_episodes,
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat(),
+        }
+        save_metrics(run_dir, eval_metrics)
+        
+        env.close()
+        return 0
+
+    # Training mode
     best_eval = -float("inf")
+    training_metrics = {
+        "run_id": run_id,
+        "mode": "training",
+        "episodes": args.episodes,
+        "episode_data": [],
+        "evaluation_data": [],
+        "config": {
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "replay_size": args.replay_size,
+            "target_update": args.target_update,
+            "flow_rate": args.flow_rate,
+            "osm_file": str(args.osm_file) if args.osm_file else None,
+            "tls_id": args.tls_id,
+        },
+        "timestamp": datetime.now().isoformat(),
+    }
+    
     print("\nStarting training...")
     print("=" * 80)
     
@@ -152,6 +302,20 @@ def main(argv: list[str]) -> int:
         total_queues = sum(info.get("queues", []))
         total_waiting = sum(info.get("waiting_times", []))
         
+        episode_data = {
+            "episode": episode,
+            "reward": float(reward),
+            "epsilon": float(agent.epsilon),
+            "total_queues": int(total_queues),
+            "total_waiting_time": float(total_waiting),
+            "queues": info.get("queues", []),
+            "waiting_times": info.get("waiting_times", []),
+            "avg_loss": info.get("avg_loss"),
+            "num_updates": info.get("num_updates", 0),
+            "action_distribution": info.get("action_distribution", {}),
+        }
+        training_metrics["episode_data"].append(episode_data)
+        
         print(f"Episode {episode:03d} | Reward: {reward:7.2f} | "
               f"Epsilon: {agent.epsilon:.3f} | "
               f"Total Queues: {total_queues:3d} | "
@@ -159,6 +323,12 @@ def main(argv: list[str]) -> int:
 
         if args.eval_every and episode % args.eval_every == 0:
             eval_reward, eval_metrics = evaluate(env, agent, args.eval_episodes)
+            eval_data = {
+                "episode": episode,
+                "metrics": eval_metrics,
+            }
+            training_metrics["evaluation_data"].append(eval_data)
+            
             print(f"\n  Evaluation (episodes {episode - args.eval_every + 1}-{episode}):")
             print(f"    Average Reward: {eval_reward:.2f}")
             print(f"    Average Total Queues: {eval_metrics['avg_total_queues']:.1f}")
@@ -166,9 +336,22 @@ def main(argv: list[str]) -> int:
             best_eval = max(best_eval, eval_reward)
             print()
 
-    args.save_path.parent.mkdir(parents=True, exist_ok=True)
-    agent.save(args.save_path)
-    print(f"Saved trained agent to {args.save_path}")
+    # Save agent weights
+    weights_path = args.save_path or (run_dir / "weights.pt")
+    weights_path.parent.mkdir(parents=True, exist_ok=True)
+    agent.save(weights_path)
+    print(f"\nSaved trained agent weights to {weights_path}")
+    
+    # Add final statistics to metrics
+    training_metrics["final_epsilon"] = float(agent.epsilon)
+    training_metrics["best_eval_reward"] = float(best_eval) if best_eval > -float("inf") else None
+    
+    # Save metrics
+    save_metrics(run_dir, training_metrics)
+    
+    print(f"\nTraining complete! Run ID: {run_id}")
+    print(f"  Weights: {weights_path}")
+    print(f"  Metrics: {run_dir / 'metrics.json'}")
 
     env.close()
     return 0
