@@ -369,13 +369,34 @@ class OSMScenario:
         # Convert OSM to SUMO network
         tls_id, plain_files = self._generate_network(temp_dir, net_file)
 
+        # Get all available TLS IDs for validation
+        all_tls_ids = self._get_all_tls_ids(net_file)
+        
         # Use provided TLS ID or the first one found
-        final_tls_id = self.tls_id or tls_id
-        if not final_tls_id:
-            raise ValueError("No traffic lights found in the network. Please ensure the OSM file contains traffic signals.")
+        if self.tls_id:
+            if self.tls_id not in all_tls_ids:
+                print(f"\nWarning: Specified traffic light ID '{self.tls_id}' not found in network!", file=sys.stderr)
+                if all_tls_ids:
+                    print(f"Available traffic light IDs (showing first 10): {', '.join(all_tls_ids[:10])}", file=sys.stderr)
+                    if len(all_tls_ids) > 10:
+                        print(f"... and {len(all_tls_ids) - 10} more", file=sys.stderr)
+                    print(f"Using first available TLS ID: {all_tls_ids[0]}", file=sys.stderr)
+                    final_tls_id = all_tls_ids[0]
+                else:
+                    raise ValueError("No traffic lights found in the network. Please ensure the OSM file contains traffic signals.")
+            else:
+                final_tls_id = self.tls_id
+        else:
+            final_tls_id = tls_id
+            if not final_tls_id:
+                raise ValueError("No traffic lights found in the network. Please ensure the OSM file contains traffic signals.")
 
         # Extract lanes for the selected traffic light
         incoming_lanes, outgoing_lanes = self._extract_lanes_for_tls(net_file, final_tls_id)
+        
+        if not incoming_lanes:
+            print(f"Warning: No incoming lanes found for traffic light '{final_tls_id}'.", file=sys.stderr)
+            print("This may indicate the traffic light is not properly connected in the network.", file=sys.stderr)
 
         # Generate routes
         self._generate_routes(net_file, trips_file, route_file)
@@ -400,10 +421,14 @@ class OSMScenario:
     ) -> Tuple[Optional[str], List[Path]]:
         """Convert OSM file to SUMO network using netconvert with cleaning options."""
         
+        # Try to pre-filter OSM file to only include roads and traffic signals
+        filtered_osm = self._filter_osm_file(temp_dir)
+        osm_input = filtered_osm if filtered_osm else self.osm_file
+        
         cmd = [
             self._resolve_netconvert_binary(),
             "--osm-files",
-            os.fspath(self.osm_file),
+            os.fspath(osm_input),
             "--output-file",
             os.fspath(net_file),
             "--no-internal-links",
@@ -420,18 +445,154 @@ class OSMScenario:
             "true",
             "--tls.join",
             "true",
+            # Simplify geometry to avoid angle calculation problems
+            "--geometry.max-angle",
+            "99.0",
+            "--junctions.corner-detail",
+            "0",
+            # Additional robustness options
+            "--junctions.limit-turn-speed",
+            "5.5",
+            "--edges.join",
+            "true",
+            # Filter out non-road vehicle classes after conversion
+            "--remove-edges.by-vclass",
+            "rail_slow,rail_fast,bicycle,pedestrian,ship",
         ]
         cmd.extend(self._netconvert_options)
 
-        subprocess.run(cmd, check=True)
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            # If it fails, try with even more relaxed options (less aggressive cleaning)
+            error_msg = e.stderr if e.stderr else (e.stdout if e.stdout else "Unknown error")
+            print("Warning: Initial netconvert failed, retrying with relaxed options...", file=sys.stderr)
+            if error_msg:
+                # Print relevant error info (skip verbose warnings)
+                error_lines = error_msg.split('\n')
+                critical_errors = [line for line in error_lines if 'Error:' in line or 'Assertion' in line or 'failed' in line.lower()]
+                if critical_errors:
+                    print("Critical errors:", file=sys.stderr)
+                    for err in critical_errors[:3]:  # Show first 3 critical errors
+                        print(f"  {err}", file=sys.stderr)
+            
+            # Fallback: minimal options to avoid angle calculation issues
+            cmd_fallback = [
+                self._resolve_netconvert_binary(),
+                "--osm-files",
+                os.fspath(osm_input),
+                "--output-file",
+                os.fspath(net_file),
+                "--no-internal-links",
+                "--geometry.remove",
+                "--roundabouts.guess",
+                "true",
+                "--tls.guess-signals",
+                "true",
+                "--geometry.max-angle",
+                "99.0",
+                "--junctions.corner-detail",
+                "0",
+                "--remove-edges.by-vclass",
+                "rail_slow,rail_fast,bicycle,pedestrian,ship",
+            ]
+            cmd_fallback.extend(self._netconvert_options)
+            
+            try:
+                subprocess.run(cmd_fallback, check=True)
+            except subprocess.CalledProcessError as e2:
+                # Last resort: absolute minimum options, no roundabout processing
+                print("Warning: Fallback also failed, trying minimal options without roundabout processing...", file=sys.stderr)
+                cmd_minimal = [
+                    self._resolve_netconvert_binary(),
+                    "--osm-files",
+                    os.fspath(osm_input),
+                    "--output-file",
+                    os.fspath(net_file),
+                    "--no-internal-links",
+                    "--geometry.remove",
+                    # Skip roundabout processing which triggers angle calculation
+                    "--roundabouts.guess",
+                    "false",
+                    "--tls.guess-signals",
+                    "true",
+                    "--remove-edges.by-vclass",
+                    "rail_slow,rail_fast,bicycle,pedestrian,ship",
+                ]
+                cmd_minimal.extend(self._netconvert_options)
+                
+                try:
+                    subprocess.run(cmd_minimal, check=True)
+                except subprocess.CalledProcessError as e3:
+                    # Final attempt: absolute bare minimum
+                    print("\n" + "="*80, file=sys.stderr)
+                    print("ERROR: All netconvert conversion attempts failed!", file=sys.stderr)
+                    print("="*80, file=sys.stderr)
+                    print("The OSM file contains problematic junction geometry that causes netconvert", file=sys.stderr)
+                    print("to crash with an angle calculation assertion failure.", file=sys.stderr)
+                    print("\nThis is NOT about roundabouts - it's a bug in netconvert when processing", file=sys.stderr)
+                    print("certain complex or malformed junctions in the OSM data.", file=sys.stderr)
+                    print("\nPossible solutions:", file=sys.stderr)
+                    print("1. Pre-process the OSM file to fix problematic junctions", file=sys.stderr)
+                    print("2. Use a different map region/extract with cleaner geometry", file=sys.stderr)
+                    print("3. Use SUMO's polyconvert or osmFilter to clean the OSM data first", file=sys.stderr)
+                    print("4. Report this as a bug to the SUMO project with the OSM file", file=sys.stderr)
+                    print("="*80 + "\n", file=sys.stderr)
+                    raise RuntimeError(
+                        f"Failed to convert OSM file '{self.osm_file}' to SUMO network. "
+                        "The file contains problematic geometry that causes netconvert to crash. "
+                        "See error messages above for details."
+                    ) from e3
 
         # Extract traffic light IDs
         tls_id = self._extract_tls_ids(net_file)
 
         return tls_id, []
 
-    def _extract_tls_ids(self, net_file: Path) -> Optional[str]:
-        """Extract traffic light IDs from the network file."""
+    def _filter_osm_file(self, temp_dir: Path) -> Optional[Path]:
+        """Pre-filter OSM file to only include roads and traffic signals using osmfilter if available."""
+        try:
+            # Check if osmfilter is available
+            result = subprocess.run(
+                ["osmfilter", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode != 0:
+                return None  # osmfilter not available
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None  # osmfilter not found
+        
+        # Filter OSM file to only keep roads and traffic signals
+        filtered_osm = temp_dir / "filtered.osm"
+        cmd = [
+            "osmfilter",
+            os.fspath(self.osm_file),
+            "--keep=",
+            "highway=motorway =motorway_link =trunk =trunk_link =primary =primary_link "
+            "=secondary =secondary_link =tertiary =tertiary_link =residential "
+            "=unclassified =service =living_street =pedestrian =track",
+            "--keep-nodes=",
+            "highway=traffic_signals =stop =give_way",
+            "--keep-ways=",
+            "highway=",
+            "-o=",
+            os.fspath(filtered_osm),
+        ]
+        
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+            if filtered_osm.exists() and filtered_osm.stat().st_size > 0:
+                print("Pre-filtered OSM file to only include roads and traffic signals", file=sys.stderr)
+                return filtered_osm
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass  # If filtering fails, use original file
+        
+        return None
+
+    def _get_all_tls_ids(self, net_file: Path) -> List[str]:
+        """Get all traffic light IDs from the network file."""
         tree = ET.parse(net_file)
         root = tree.getroot()
 
@@ -460,6 +621,11 @@ class OSMScenario:
                 if junction_type == "traffic_light":
                     tls_ids.append(junction_id)
 
+        return tls_ids
+
+    def _extract_tls_ids(self, net_file: Path) -> Optional[str]:
+        """Extract the first traffic light ID from the network file."""
+        tls_ids = self._get_all_tls_ids(net_file)
         return tls_ids[0] if tls_ids else None
 
     def _extract_lanes_for_tls(
@@ -526,6 +692,11 @@ class OSMScenario:
         # First, generate trips using randomTrips.py
         random_trips_script = self._resolve_random_trips_binary()
         python_exe = sys.executable  # Use the same Python interpreter
+        
+        # Convert flow rate (vehicles per hour) to probability per second
+        # flow_rate per hour = flow_rate / 3600 per second
+        probability_per_second = self.flow_rate / 3600.0
+        
         random_trips_cmd = [
             python_exe,
             random_trips_script,
@@ -533,12 +704,12 @@ class OSMScenario:
             os.fspath(net_file),
             "-o",
             os.fspath(trips_file),
-            "--begin",
+            "-b",
             str(self.begin_time),
-            "--end",
+            "-e",
             str(self.end_time),
-            "--flows-per-hour",
-            str(self.flow_rate),
+            "-p",
+            str(probability_per_second),
             "--random",
         ]
 

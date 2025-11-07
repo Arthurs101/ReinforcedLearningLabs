@@ -110,7 +110,6 @@ ReinforcedLearningLabs/
 ├── maps/
 │   └── *.osm           # OpenStreetMap files for real-world scenarios
 ├── train_sumo_agent.py # CLI for training/evaluating agents
-├── example_osm_usage.py # Example script for using OSM scenarios
 ├── requirements.txt
 └── README.md
 ```

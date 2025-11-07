@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -60,12 +61,13 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
         self.scenario_builder = scenario or SimpleIntersectionScenario()
         self.artifacts: ScenarioArtifacts = self.scenario_builder.build()
 
-        self._phase_map: Tuple[str, ...] = ("GGrr", "rrGG")
         self._tls_id = self.artifacts.tls_id
         self._incoming_lanes = tuple(self.artifacts.incoming_lanes)
+        self._phase_map: Tuple[str, ...] = ("GGrr", "rrGG")  # Default, will be updated after TraCI starts
+        self._num_links: Optional[int] = None  # Will be set after TraCI connection
 
         features_per_lane = 3  # queue, speed, waiting time
-        self.action_space = gym.spaces.Discrete(len(self._phase_map))
+        self.action_space = gym.spaces.Discrete(2)  # Will be updated after phase map is determined
         self.observation_space = gym.spaces.Box(
             low=0.0,
             high=1.0,
@@ -86,6 +88,9 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
         self._start_traci(seed if seed is not None else self.config.seed)
         self._current_step = 0
         self._last_action = 0
+
+        # Initialize phase map based on actual traffic light configuration
+        self._initialize_phase_map()
 
         # Warm-up period to populate queues before control begins
         for _ in range(max(0, self.config.warmup_steps)):
@@ -159,6 +164,37 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
 
         traci.start(cmd)
         self._conn_active = True
+
+    def _initialize_phase_map(self) -> None:
+        """Initialize phase map based on the actual traffic light configuration."""
+        try:
+            # Get current state to determine number of controlled links
+            current_state = traci.trafficlight.getRedYellowGreenState(self._tls_id)
+            self._num_links = len(current_state)
+            
+            # Generate phase map based on number of links
+            if self._num_links == 4:
+                # Simple 4-way intersection: alternate between two directions
+                self._phase_map = ("GGrr", "rrGG")
+            elif self._num_links >= 2:
+                # For other configurations, create alternating phases
+                # First half green, second half red, then vice versa
+                half = self._num_links // 2
+                phase1 = "G" * half + "r" * (self._num_links - half)
+                phase2 = "r" * half + "G" * (self._num_links - half)
+                self._phase_map = (phase1, phase2)
+            else:
+                # Fallback: use current state as single phase
+                self._phase_map = (current_state,)
+            
+            # Update action space to match phase map
+            self.action_space = gym.spaces.Discrete(len(self._phase_map))
+        except Exception as e:
+            # Fallback to default if we can't get the state
+            print(f"Warning: Could not determine traffic light phase configuration: {e}", file=sys.stderr)
+            print(f"Using default phase map for 4 links", file=sys.stderr)
+            self._phase_map = ("GGrr", "rrGG")
+            self.action_space = gym.spaces.Discrete(2)
 
     def _apply_phase(self, action_idx: int) -> None:
         state = self._phase_map[action_idx]
