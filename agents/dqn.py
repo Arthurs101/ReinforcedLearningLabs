@@ -141,7 +141,9 @@ class DQNAgent(BaseAgent):
         )
 
     def load(self, source: Path) -> None:  # type: ignore[override]
-        checkpoint = torch.load(source, map_location=self.device)
+        # weights_only=False is safe here since we're loading our own checkpoints
+        # PyTorch 2.6+ requires this for custom objects like DQNConfig
+        checkpoint = torch.load(source, map_location=self.device, weights_only=False)
         self.policy_net.load_state_dict(checkpoint["policy"])
         self.target_net.load_state_dict(checkpoint["target"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])

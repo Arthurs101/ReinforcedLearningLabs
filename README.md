@@ -77,8 +77,9 @@ python train_sumo_agent.py --osm-file maps/z9RAW.osm --flow-rate 800 --tls-id "1
 - `--max-steps N` - Maximum steps per episode
 - `--eval-every N` - Periodically evaluate performance every N episodes (0 disables)
 - `--eval-episodes N` - Number of episodes to average during evaluation (default: 5)
-- `--save-path PATH` - Where to save checkpoints (default: `artifacts/dqn_agent.pt`)
-- `--no-train` - Skip learning and only evaluate (useful for validating saved checkpoints)
+- `--save-path PATH` - Where to save checkpoints (default: `output/run_id/weights.pt`)
+- `--output-dir PATH` - Directory to save run outputs (default: `output`)
+- `--run-id ID` - Custom run ID (default: auto-generated timestamp)
 
 ### Performance Metrics
 
@@ -97,6 +98,69 @@ Episode 002 | Reward:  -38.15 | Epsilon: 0.902 | Total Queues:   8 | Total Waiti
 
 When `--eval-every` is set, evaluation reports average metrics across multiple episodes for more stable performance estimates.
 
+## Loading and Visualizing Trained Models
+
+After training, you can load a saved model and watch it control traffic lights in real-time using the dedicated visualization script.
+
+### Visualize Trained Agent (GUI)
+
+**Load and visualize a trained model:**
+```bash
+python visualize_agent.py --load-path output/20251106_192848_00f95735/weights.pt --episodes 5
+```
+
+The script automatically detects configuration from the checkpoint directory, so you typically only need to specify the weights path!
+
+**Key options:**
+- `--load-path PATH` - **Required.** Path to trained model weights (e.g., `output/run_id/weights.pt`)
+- `--osm-file PATH` - OSM map file (auto-detected from checkpoint config if available)
+- `--flow-rate N` - Vehicle flow rate (auto-detected from checkpoint config if available)
+- `--episodes N` - Number of episodes to run (default: 5)
+- `--max-steps N` - Maximum steps per episode (default: 900)
+- `--no-gui` - Run without GUI (headless mode, faster but no visualization)
+- `--tls-id ID` - Specific traffic light ID (for OSM scenarios)
+
+**Example workflow:**
+```bash
+# 1. Train a model (saves to output/run_id/weights.pt)
+python train_sumo_agent.py --osm-file maps/sanFrancisco.osm --flow-rate 800 --episodes 100
+
+# 2. Visualize the trained model (auto-detects config from checkpoint)
+python visualize_agent.py --load-path output/20251106_192848_00f95735/weights.pt --episodes 5
+
+# 3. Or specify options explicitly
+python visualize_agent.py \
+    --load-path output/20251106_192848_00f95735/weights.pt \
+    --osm-file maps/sanFrancisco.osm \
+    --flow-rate 800 \
+    --episodes 5
+```
+
+**Note:** The GUI will open automatically. Watch how the trained agent controls traffic lights to minimize queues and waiting times. Close the SUMO GUI window when done.
+
+### Evaluate Without GUI
+
+**Headless evaluation (faster, no visualization):**
+```bash
+python visualize_agent.py --load-path output/20251106_192848_00f95735/weights.pt --episodes 10 --no-gui
+```
+
+## Analyzing Training Results
+
+Use the provided Jupyter notebook to analyze training metrics:
+
+```bash
+jupyter notebook analyze_training.ipynb
+```
+
+The notebook automatically loads the most recent training run and provides:
+- Training progress visualizations (reward, queues, waiting times)
+- Loss curves and action distribution analysis
+- Per-lane performance breakdowns
+- Comparison tools for multiple training runs
+
+Metrics are automatically saved to `output/run_id/metrics.json` during training.
+
 ## Code Layout
 
 ```
@@ -109,7 +173,14 @@ ReinforcedLearningLabs/
 │   └── scenario.py     # Scenario builders (SimpleIntersectionScenario, OSMScenario)
 ├── maps/
 │   └── *.osm           # OpenStreetMap files for real-world scenarios
-├── train_sumo_agent.py # CLI for training/evaluating agents
+├── output/              # Training outputs (weights, metrics, configs)
+│   └── run_id/         # Each training run gets a unique directory
+│       ├── weights.pt   # Trained model weights
+│       ├── metrics.json # Training metrics and episode data
+│       └── config.json  # Training configuration
+├── train_sumo_agent.py # CLI for training agents
+├── visualize_agent.py  # CLI for visualizing trained agents in SUMO GUI
+├── analyze_training.ipynb # Jupyter notebook for analyzing training results
 ├── requirements.txt
 └── README.md
 ```

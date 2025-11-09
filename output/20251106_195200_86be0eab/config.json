@@ -1,0 +1,17 @@
+{
+  "run_id": "20251106_195200_86be0eab",
+  "episodes": 50,
+  "max_steps": 900,
+  "step_length": 1.0,
+  "seed": null,
+  "learning_rate": 0.001,
+  "batch_size": 64,
+  "replay_size": 50000,
+  "target_update": 200,
+  "eval_every": 0,
+  "eval_episodes": 5,
+  "osm_file": "maps/sanFrancisco.osm",
+  "flow_rate": 600,
+  "tls_id": null,
+  "device": "cpu"
+}
