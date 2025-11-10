@@ -693,10 +693,6 @@ class OSMScenario:
         random_trips_script = self._resolve_random_trips_binary()
         python_exe = sys.executable  # Use the same Python interpreter
         
-        # Convert flow rate (vehicles per hour) to probability per second
-        # flow_rate per hour = flow_rate / 3600 per second
-        probability_per_second = self.flow_rate / 3600.0
-        
         random_trips_cmd = [
             python_exe,
             random_trips_script,
@@ -708,8 +704,8 @@ class OSMScenario:
             str(self.begin_time),
             "-e",
             str(self.end_time),
-            "-p",
-            str(probability_per_second),
+            "--insertion-rate",
+            str(self.flow_rate),  # Vehicles per hour
             "--random",
         ]
 

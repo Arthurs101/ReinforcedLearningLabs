@@ -8,12 +8,19 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Union
 
 import numpy as np
 
-from agents import AgentTransition, DQNAgent, DQNConfig
+from agents import (
+    AgentTransition,
+    DQNAgent,
+    DQNConfig,
+    ImprovedDQNAgent,
+    ImprovedDQNConfig,
+)
 from sumo import SUMOEnvironment, SUMOEnvironmentConfig, OSMScenario, SimpleIntersectionScenario
+import gymnasium as gym
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -40,10 +47,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--osm-file", type=Path, default=None, help="Path to OSM map file (if provided, uses OSM scenario instead of simple intersection)")
     parser.add_argument("--flow-rate", type=int, default=600, help="Vehicle flow rate per hour (for OSM scenarios)")
     parser.add_argument("--tls-id", type=str, default=None, help="Traffic light ID to control (for OSM scenarios, defaults to first TLS found)")
+    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "improved"], help="Agent type: 'dqn' (standard) or 'improved' (Double DQN + Dueling)")
     return parser.parse_args(argv)
 
 
-def build_configs(args: argparse.Namespace) -> Tuple[SUMOEnvironmentConfig, DQNConfig]:
+def build_configs(args: argparse.Namespace, agent_type: str = "dqn") -> Tuple[SUMOEnvironmentConfig, Union[DQNConfig, ImprovedDQNConfig]]:
+    """Build environment and agent configurations."""
     env_config = SUMOEnvironmentConfig(
         max_steps=args.max_steps,
         step_length=args.step_length,
@@ -51,18 +60,27 @@ def build_configs(args: argparse.Namespace) -> Tuple[SUMOEnvironmentConfig, DQNC
         seed=args.seed,
     )
 
-    agent_config = DQNConfig(
-        learning_rate=args.learning_rate,
-        batch_size=args.batch_size,
-        replay_size=args.replay_size,
-        target_update_interval=args.target_update,
-        device=args.device,
-    )
+    if agent_type == "improved":
+        agent_config = ImprovedDQNConfig(
+            learning_rate=args.learning_rate,
+            batch_size=args.batch_size,
+            replay_size=args.replay_size,
+            target_update_interval=args.target_update,
+            device=args.device,
+        )
+    else:
+        agent_config = DQNConfig(
+            learning_rate=args.learning_rate,
+            batch_size=args.batch_size,
+            replay_size=args.replay_size,
+            target_update_interval=args.target_update,
+            device=args.device,
+        )
 
     return env_config, agent_config
 
 
-def run_episode(env: SUMOEnvironment, agent: DQNAgent, train: bool = True) -> Tuple[float, dict]:
+def run_episode(env: SUMOEnvironment, agent: Union[DQNAgent, ImprovedDQNAgent], train: bool = True) -> Tuple[float, dict]:
     observation, _ = env.reset()
     done = False
     episode_reward = 0.0
@@ -72,15 +90,25 @@ def run_episode(env: SUMOEnvironment, agent: DQNAgent, train: bool = True) -> Tu
 
     while not done:
         action = agent.select_action(observation, explore=train)
-        next_obs, reward, terminated, truncated, info = env.step(action)
+        
+        # Convert flattened action back to tuple/array for MultiDiscrete
+        if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+            num_durations = env.action_space.nvec[1]
+            phase_idx = action // num_durations
+            duration_idx = action % num_durations
+            env_action = np.array([phase_idx, duration_idx])
+        else:
+            env_action = action
+        
+        next_obs, reward, terminated, truncated, info = env.step(env_action)
         done = terminated or truncated
         episode_info = info  # Keep last info for final metrics
-        episode_actions.append(action)
+        episode_actions.append(action)  # Store flattened action for compatibility
 
         if train:
             transition = AgentTransition(
                 state=observation,
-                action=action,
+                action=action,  # Store flattened action
                 reward=reward,
                 next_state=next_obs,
                 done=done,
@@ -108,7 +136,7 @@ def run_episode(env: SUMOEnvironment, agent: DQNAgent, train: bool = True) -> Tu
     return episode_reward, episode_info
 
 
-def evaluate(env: SUMOEnvironment, agent: DQNAgent, episodes: int) -> Tuple[float, dict]:
+def evaluate(env: SUMOEnvironment, agent: Union[DQNAgent, ImprovedDQNAgent], episodes: int) -> Tuple[float, dict]:
     results = [run_episode(env, agent, train=False) for _ in range(episodes)]
     rewards = [r[0] for r in results]
     infos = [r[1] for r in results]
@@ -179,7 +207,7 @@ def main(argv: list[str]) -> int:
     # Save configuration
     save_config(run_dir, args, run_id)
 
-    env_config, agent_config = build_configs(args)
+    env_config, agent_config = build_configs(args, args.agent_type)
 
     # Create scenario based on whether OSM file is provided
     if args.osm_file:
@@ -202,8 +230,23 @@ def main(argv: list[str]) -> int:
 
     env = SUMOEnvironment(config=env_config, scenario=scenario)
     state_size = env.observation_space.shape[0]
-    action_size = env.action_space.n
-    agent = DQNAgent(state_size, action_size, agent_config)
+    
+    # Handle MultiDiscrete action space (phase + duration) vs Discrete (phase only)
+    if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+        # Flatten MultiDiscrete: [num_phases, num_durations] -> num_phases * num_durations
+        action_size = env.action_space.nvec[0] * env.action_space.nvec[1]
+        print(f"Action space: MultiDiscrete [{env.action_space.nvec[0]} phases, {env.action_space.nvec[1]} durations] = {action_size} total actions")
+    else:
+        action_size = env.action_space.n
+        print(f"Action space: Discrete ({action_size} phases)")
+    
+    # Create agent based on type
+    if args.agent_type == "improved":
+        agent = ImprovedDQNAgent(state_size, action_size, agent_config)
+        print(f"Using Improved DQN agent (Double DQN + Dueling architecture)")
+    else:
+        agent = DQNAgent(state_size, action_size, agent_config)
+        print(f"Using standard DQN agent")
     
     if args.osm_file:
         print(f"Traffic light ID: {env.artifacts.tls_id}")

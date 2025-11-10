@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from agents import DQNAgent, DQNConfig
+from agents import DQNAgent, DQNConfig, ImprovedDQNAgent, ImprovedDQNConfig
 from sumo import SUMOEnvironment, SUMOEnvironmentConfig, OSMScenario, SimpleIntersectionScenario
+import gymnasium as gym
+import numpy as np
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -134,11 +136,35 @@ def main(argv: list[str]) -> int:
     # Create environment
     env = SUMOEnvironment(config=env_config, scenario=scenario)
     state_size = env.observation_space.shape[0]
-    action_size = env.action_space.n
+    
+    # Handle MultiDiscrete action space
+    if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+        action_size = env.action_space.nvec[0] * env.action_space.nvec[1]
+    else:
+        action_size = env.action_space.n
 
-    # Create agent with default config (will be overridden by loaded weights)
-    agent_config = DQNConfig(device="cpu")
-    agent = DQNAgent(state_size, action_size, agent_config)
+    # Try to detect agent type from checkpoint
+    agent = None
+    try:
+        import torch
+        checkpoint = torch.load(args.load_path, map_location="cpu", weights_only=False)
+        
+        # Check if checkpoint has config that indicates improved agent
+        config = checkpoint.get("config")
+        if config and hasattr(config, "use_double_dqn"):
+            # Improved agent
+            agent_config = ImprovedDQNConfig(device="cpu")
+            agent = ImprovedDQNAgent(state_size, action_size, agent_config)
+            print("Detected Improved DQN agent from checkpoint")
+        else:
+            # Standard DQN agent
+            agent_config = DQNConfig(device="cpu")
+            agent = DQNAgent(state_size, action_size, agent_config)
+            print("Detected standard DQN agent from checkpoint")
+    except Exception as e:
+        print(f"Warning: Could not detect agent type, defaulting to standard DQN: {e}")
+        agent_config = DQNConfig(device="cpu")
+        agent = DQNAgent(state_size, action_size, agent_config)
 
     # Load trained weights
     print(f"\nLoading agent weights from: {args.load_path}")
@@ -178,7 +204,17 @@ def main(argv: list[str]) -> int:
 
         while not done:
             action = agent.select_action(observation, explore=False)  # No exploration during evaluation
-            next_obs, reward, terminated, truncated, info = env.step(action)
+            
+            # Convert flattened action back to tuple/array for MultiDiscrete
+            if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+                num_durations = env.action_space.nvec[1]
+                phase_idx = action // num_durations
+                duration_idx = action % num_durations
+                env_action = np.array([phase_idx, duration_idx])
+            else:
+                env_action = action
+            
+            next_obs, reward, terminated, truncated, info = env.step(env_action)
             done = terminated or truncated
 
             episode_reward += reward
@@ -213,5 +249,6 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+
 
 
