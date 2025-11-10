@@ -1,5 +1,5 @@
 {
-  "run_id": "20251106_195200_86be0eab",
+  "run_id": "20251109_204535_7ead7c5a",
   "episodes": 50,
   "max_steps": 900,
   "step_length": 1.0,
@@ -11,7 +11,7 @@
   "eval_every": 0,
   "eval_episodes": 5,
   "osm_file": "maps/sanFrancisco.osm",
-  "flow_rate": 600,
+  "flow_rate": 1000,
   "tls_id": null,
   "device": "cpu"
 }

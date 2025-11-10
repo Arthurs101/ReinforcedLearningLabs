@@ -24,7 +24,7 @@ from .scenario import ScenarioArtifacts, SimpleIntersectionScenario, OSMScenario
 class SUMOEnvironmentConfig:
     """Configuration parameters for the SUMO environment wrapper."""
 
-    max_steps: int = 900
+    max_steps: int = 1000
     step_length: float = 1.0
     warmup_steps: int = 0
     frame_skip: int = 1
@@ -34,8 +34,9 @@ class SUMOEnvironmentConfig:
     queue_capacity: float = 20.0
     max_speed: float = 13.89  # 50 km/h in m/s
     queue_penalty: float = 1.0
-    wait_penalty: float = 0.05
-    clear_bonus: float = 2.5
+    wait_penalty: float = 0.1  # Increased from 0.05 for better balance
+    clear_bonus: float = 10.0  # Increased from 2.5 for better incentive
+    max_wait_time: float = 60.0  # Realistic maximum wait time for normalization (seconds)
     seed: Optional[int] = None
     additional_sumo_args: Tuple[str, ...] = field(default_factory=tuple)
     # Phase duration control
@@ -88,6 +89,7 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
         self._current_step = 0
         self._current_phase_duration: int = 0  # Steps remaining in current phase
         self._current_phase: int = 0  # Current phase index
+        self._prev_total_queues: int = 0  # Track previous total queues for reward shaping
 
     # ------------------------------------------------------------------
     # Gym API
@@ -100,6 +102,7 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
         self._last_action = 0 if not self.config.enable_duration_control else (0, 0)
         self._current_phase_duration = 0
         self._current_phase = 0
+        self._prev_total_queues = 0  # Reset previous queues tracking
 
         # Initialize phase map based on actual traffic light configuration
         self._initialize_phase_map()
@@ -200,13 +203,20 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _start_traci(self, seed: Optional[int]) -> None:
+    def _start_traci(self, seed: Optional[int], force_gui: Optional[bool] = None) -> None:
         if self._conn_active:
             traci.close(False)
             self._conn_active = False
 
+        if force_gui is None:
+            use_gui = self.config.use_gui
+        else:
+            use_gui = force_gui
+
+        binary = self.config.sumo_gui_binary if use_gui else self.config.sumo_binary
+
         cmd = [
-            self.config.resolve_binary(),
+            binary,
             "-c",
             os.fspath(self.artifacts.config_file),
             "--step-length",
@@ -325,18 +335,29 @@ class SUMOEnvironment(gym.Env[np.ndarray, int]):
         for queue, speed, wait in zip(queues, speeds, waits):
             queue_norm = min(queue / max(self.config.queue_capacity, 1e-6), 1.0)
             speed_norm = min(speed / max(self.config.max_speed, 1e-6), 1.0)
-            wait_norm = min(wait / max(self.config.max_steps * self.config.step_length, 1e-6), 1.0)
+            # Use realistic maximum wait time instead of max_steps * step_length
+            wait_norm = min(wait / max(self.config.max_wait_time, 1e-6), 1.0)
             features.extend([queue_norm, speed_norm, wait_norm])
 
         return np.asarray(features, dtype=np.float32)
 
     def _calculate_reward(self) -> float:
-        queue_penalty = self.config.queue_penalty * sum(self._lane_queues())
+        current_total_queues = sum(self._lane_queues())
+        queue_penalty = self.config.queue_penalty * current_total_queues
         wait_penalty = self.config.wait_penalty * sum(self._lane_wait_times())
         reward = -(queue_penalty + wait_penalty)
 
+        # Increased clear bonus for better incentive
         if queue_penalty == 0:
             reward += self.config.clear_bonus
+        
+        # Reward for reducing queues (encourages proactive queue management)
+        queue_reduction = self._prev_total_queues - current_total_queues
+        if queue_reduction > 0:
+            reward += 0.1 * queue_reduction
+        
+        # Update previous queues for next step
+        self._prev_total_queues = current_total_queues
 
         return float(reward)
 

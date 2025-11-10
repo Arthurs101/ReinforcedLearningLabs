@@ -10,7 +10,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 
 @dataclass
@@ -42,7 +42,7 @@ class SimpleIntersectionScenario:
     def __init__(
         self,
         lane_length: float = 100.0,
-        flow_rate: int = 600,
+        flow_rate: int = 1000,  # Default: 1000 vehicles/hour (moderate traffic)
         output_dir: Optional[Path] = None,
         tls_id: str = "J0",
     ) -> None:
@@ -319,7 +319,7 @@ class OSMScenario:
     def __init__(
         self,
         osm_file: Path,
-        flow_rate: int = 600,
+        flow_rate: int = 1000,  # Default: 1000 vehicles/hour (moderate traffic)
         output_dir: Optional[Path] = None,
         tls_id: Optional[str] = None,
         begin_time: int = 0,
@@ -683,6 +683,139 @@ class OSMScenario:
                         outgoing_lanes.append(lane_id)
 
         return incoming_lanes, outgoing_lanes
+
+    def get_tls_positions(self, net_file: Path) -> Dict[str, Tuple[float, float]]:
+        """Get positions (x, y) of all traffic lights from the network file.
+        
+        Returns:
+            Dictionary mapping TLS ID to (x, y) position tuple.
+        """
+        tree = ET.parse(net_file)
+        root = tree.getroot()
+        
+        tls_positions: Dict[str, Tuple[float, float]] = {}
+        
+        # Get TLS IDs
+        tls_ids = self._get_all_tls_ids(net_file)
+        
+        # Find positions from junctions
+        for junction in root.findall("junction"):
+            junction_id = junction.get("id", "")
+            junction_type = junction.get("type", "")
+            
+            if junction_type == "traffic_light" and junction_id in tls_ids:
+                x = float(junction.get("x", "0"))
+                y = float(junction.get("y", "0"))
+                tls_positions[junction_id] = (x, y)
+        
+        # Also check tlLogic elements for positions
+        for tl_logic in root.findall("tlLogic"):
+            tls_id = tl_logic.get("id")
+            if tls_id and tls_id not in tls_positions:
+                # Try to find associated junction
+                for junction in root.findall("junction"):
+                    if junction.get("id") == tls_id:
+                        x = float(junction.get("x", "0"))
+                        y = float(junction.get("y", "0"))
+                        tls_positions[tls_id] = (x, y)
+                        break
+        
+        return tls_positions
+
+    def group_tls_by_proximity(
+        self,
+        net_file: Path,
+        tls_ids: Optional[List[str]] = None,
+        max_tls_per_group: int = 4,
+        max_distance: Optional[float] = None,
+    ) -> List[List[str]]:
+        """Group traffic lights by proximity.
+        
+        Args:
+            net_file: Path to network file
+            tls_ids: List of TLS IDs to group. If None, uses all TLS.
+            max_tls_per_group: Maximum number of TLS per group
+            max_distance: Maximum distance (meters) for grouping. If None, uses clustering.
+        
+        Returns:
+            List of TLS ID groups, where each group is a list of TLS IDs.
+        """
+        if tls_ids is None:
+            tls_ids = list(self.get_all_tls_lanes(net_file).keys())
+        
+        if not tls_ids:
+            return []
+        
+        # Get positions
+        positions = self.get_tls_positions(net_file)
+        
+        # Filter TLS with known positions
+        tls_with_positions = [(tls_id, positions.get(tls_id)) for tls_id in tls_ids if tls_id in positions]
+        
+        if not tls_with_positions:
+            # If no positions found, use simple sequential grouping
+            groups = []
+            for i in range(0, len(tls_ids), max_tls_per_group):
+                groups.append(tls_ids[i:i + max_tls_per_group])
+            return groups
+        
+        # Group by proximity using simple distance-based clustering
+        groups: List[List[str]] = []
+        used_tls = set()
+        
+        for tls_id, pos in tls_with_positions:
+            if tls_id in used_tls:
+                continue
+            
+            if pos is None:
+                # TLS without position gets its own group
+                groups.append([tls_id])
+                used_tls.add(tls_id)
+                continue
+            
+            # Start a new group
+            group = [tls_id]
+            used_tls.add(tls_id)
+            
+            # Find nearby TLS
+            for other_tls_id, other_pos in tls_with_positions:
+                if other_tls_id in used_tls or other_pos is None:
+                    continue
+                
+                if len(group) >= max_tls_per_group:
+                    break
+                
+                # Calculate distance
+                distance = ((pos[0] - other_pos[0]) ** 2 + (pos[1] - other_pos[1]) ** 2) ** 0.5
+                
+                if max_distance is None or distance <= max_distance:
+                    group.append(other_tls_id)
+                    used_tls.add(other_tls_id)
+            
+            groups.append(group)
+        
+        # Add any TLS without positions as individual groups
+        for tls_id in tls_ids:
+            if tls_id not in used_tls:
+                groups.append([tls_id])
+        
+        return groups
+
+    def get_all_tls_lanes(self, net_file: Path) -> Dict[str, Tuple[List[str], List[str]]]:
+        """Get all traffic light IDs and their associated lanes.
+        
+        Returns:
+            Dictionary mapping TLS ID to (incoming_lanes, outgoing_lanes) tuple.
+        """
+        all_tls_ids = self._get_all_tls_ids(net_file)
+        tls_lanes: Dict[str, Tuple[List[str], List[str]]] = {}
+        
+        for tls_id in all_tls_ids:
+            incoming_lanes, outgoing_lanes = self._extract_lanes_for_tls(net_file, tls_id)
+            if incoming_lanes:  # Only include TLS with incoming lanes
+                tls_lanes[tls_id] = (incoming_lanes, outgoing_lanes)
+        
+        return tls_lanes
 
     def _generate_routes(
         self, net_file: Path, trips_file: Path, route_file: Path

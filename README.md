@@ -201,6 +201,58 @@ OSM scenarios automatically:
 - Generate realistic vehicle routes using `randomTrips.py` and `duarouter`
 - Clean up network geometry and join nearby junctions
 
+## Advanced Features
+
+### Phase Duration Control
+
+The environment now supports **phase duration control**, allowing agents to choose both which phase to use and how long to stay in it. This provides much more flexible traffic control:
+
+- **Action Space**: `MultiDiscrete([num_phases, num_durations])` when enabled
+- **Duration Options**: Configurable (default: 5, 10, 15, 20 seconds)
+- **Minimum Green Time**: Safety constraint to prevent too-short phases (default: 5 seconds)
+
+**Example:**
+```python
+from sumo import SUMOEnvironment, SUMOEnvironmentConfig
+
+config = SUMOEnvironmentConfig(
+    enable_duration_control=True,
+    duration_options=(5, 10, 15, 20),  # Duration choices in seconds
+    min_green_time=5,  # Minimum green time for safety
+)
+env = SUMOEnvironment(config=config, scenario=scenario)
+# Action space: MultiDiscrete([2, 4]) = 8 total actions
+```
+
+### SUMO Phase Extraction
+
+Instead of manually generating phases, the environment can **extract valid phases directly from SUMO's traffic light definition**:
+
+- Automatically handles complex intersections
+- Uses SUMO's safety-validated phases
+- Respects intersection geometry and conflict detection
+
+**Example:**
+```python
+config = SUMOEnvironmentConfig(
+    extract_phases_from_sumo=True,  # Extract phases from SUMO (default: True)
+    enable_duration_control=True,
+)
+```
+
+This is especially useful for OSM scenarios where intersections may have complex phase configurations.
+
+### Disabling Advanced Features
+
+To use the original simple phase selection (no duration control):
+
+```python
+config = SUMOEnvironmentConfig(
+    enable_duration_control=False,  # Phase selection only
+    extract_phases_from_sumo=False,  # Use generated phases
+)
+```
+
 ## Extending the Sandbox
 
 - **Custom scenarios**: Derive a new scenario builder that outputs your own network/route files, then pass it to `SUMOEnvironment`. See `OSMScenario` for an example.
